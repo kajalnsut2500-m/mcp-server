@@ -57,6 +57,25 @@ def CodingChallengesSolutionFinder(challenge_name: str) -> str:
 
     base = "https://github.com/CodingChallengesFYI/SharedSolutions/blob/main/"
     return "\n".join(f"{title}: {base}{url}" for title, url in links)
+@mcp.tool()
+def list_github_issues(repo: str) -> str:
+    """List open issues in a GitHub repo. repo should be 'username/repo-name'."""
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+    try:
+        response = httpx.get(f"https://api.github.com/repos/{repo}/issues",
+                              headers=headers, params={"state": "open"}, timeout=10.0)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        return f"Error fetching issues: {e.response.status_code} - {e.response.text}"
+    except httpx.RequestError:
+        return "Error: could not reach GitHub right now."
 
+    issues = response.json()
+    if not issues:
+        return f"No open issues in {repo}."
+    return "\n".join(f"#{i['number']}: {i['title']} — {i['html_url']}" for i in issues)
 if __name__ == "__main__":
     mcp.run(transport="stdio")
