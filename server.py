@@ -2,9 +2,6 @@ from mcp.server.mcpserver import MCPServer
 import httpx
 import re
 import os
-GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
-
-
 mcp = MCPServer("solution-finder")
 
 README_URL = "https://raw.githubusercontent.com/CodingChallengesFYI/SharedSolutions/main/README.md"
@@ -17,8 +14,11 @@ def hello(name: str) -> str:
 @mcp.tool()
 def create_github_issue(repo: str, title: str, body: str = "") -> str:
     """Create a new issue in one of the user's GitHub repos. repo should be 'username/repo-name'."""
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        return "Error: GITHUB_TOKEN environment variable is not set."
     headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json"
     }
     payload = {"title": title, "body": body}
@@ -60,8 +60,11 @@ def CodingChallengesSolutionFinder(challenge_name: str) -> str:
 @mcp.tool()
 def list_github_issues(repo: str) -> str:
     """List open issues in a GitHub repo. repo should be 'username/repo-name'."""
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        return "Error: GITHUB_TOKEN environment variable is not set."
     headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json"
     }
     try:
