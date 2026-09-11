@@ -17,6 +17,7 @@ This project draws a clear, working line across that boundary. `CodingChallenges
 | `hello(name)` | Returns a greeting — protocol sanity check | No | N/A |
 | `CodingChallengesSolutionFinder(challenge_name)` | Fetches and parses the CodingChallengesFYI/SharedSolutions README for matching challenge solutions | No | Public, read-only |
 | `create_github_issue(repo, title, body)` | Creates a real GitHub issue via the GitHub REST API | Yes — scoped personal access token | Private/authenticated, write |
+| `list_github_issues(repo)` | Lists open issues in a GitHub repo via the GitHub REST API | Yes — scoped personal access token | Private/authenticated, read |
 
 ## Architecture
 
@@ -42,7 +43,7 @@ The server speaks MCP's standard JSON-RPC protocol over stdio, meaning it requir
 ## Security model
 
 - Authentication uses a fine-grained GitHub personal access token, scoped to exactly two permissions: **Issues: Read and write** and **Pull requests: Read and write**. No broader account access is granted.
-- The token is read from an environment variable at runtime (`os.environ["GITHUB_TOKEN"]`) and is never hardcoded, logged, or committed to source control.
+- The token is read from the environment at call time (`os.environ.get("GITHUB_TOKEN")`) inside each tool that needs it, and is never hardcoded, logged, or committed to source control. The server starts and serves unauthenticated tools regardless of whether the token is present; authenticated tools return a clear error message if it is unset.
 - All external calls are wrapped in explicit error handling — network failures and unexpected API responses return a clean message to the calling agent rather than an unhandled exception.
 
 ## Setup
@@ -54,7 +55,7 @@ git clone <this-repo-url>
 cd mcp-server
 python3 -m venv .venv
 source .venv/bin/activate
-pip install mcp httpx
+pip install -r requirements.txt
 ```
 
 ### 2. Configure a GitHub token (required only for `create_github_issue`)
@@ -70,6 +71,8 @@ export GITHUB_TOKEN="your_token_here"
 ```bash
 npx @modelcontextprotocol/inspector python3 server.py
 ```
+
+> **Note:** The MCP SDK's `StdioClientTransport` only forwards a small allowlist of environment variables (`HOME`, `PATH`, `USER`, etc.) to the subprocess — `GITHUB_TOKEN` is intentionally excluded. After the Inspector opens in your browser, add `GITHUB_TOKEN` in the **Environment Variables** panel of the connection config before clicking Connect.
 
 ### 4. Connect to a client
 
