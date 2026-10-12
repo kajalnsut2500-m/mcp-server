@@ -1,4 +1,4 @@
-# solution-finder — An MCP Server for AI Coding Agents
+# An MCP Server for AI Coding Agents
 
 An MCP (Model Context Protocol) server that extends AI coding agents — Claude Code, Claude Desktop, Cursor, and any other MCP-compliant client — with two categories of capability: structured retrieval of external public data, and authenticated, permission-scoped actions on a user's behalf.
 
@@ -79,7 +79,7 @@ npx @modelcontextprotocol/inspector python3 server.py
 **Claude Code:**
 
 ```bash
-claude mcp add solution-finder --scope user -- /path/to/.venv/bin/python3 /path/to/server.py
+claude mcp add mcp-server --scope user -- /path/to/.venv/bin/python3 /path/to/server.py
 ```
 
 **Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -87,7 +87,7 @@ claude mcp add solution-finder --scope user -- /path/to/.venv/bin/python3 /path/
 ```json
 {
   "mcpServers": {
-    "solution-finder": {
+    "mcp-server": {
       "command": "/path/to/.venv/bin/python3",
       "args": ["/path/to/server.py"],
       "env": { "GITHUB_TOKEN": "your_token_here" }
