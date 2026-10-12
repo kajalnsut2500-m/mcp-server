@@ -4,10 +4,12 @@
 ![MCP](https://img.shields.io/badge/Protocol-MCP-green)
 ![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
-A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that extends AI coding agents — Claude Code, Claude Desktop, Cursor, and any MCP-compliant client — with two categories of capability:
+A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that extends AI coding agents with two categories of capability:
 
 - **Structured data retrieval** — deterministic lookups against external public sources
 - **Authenticated write actions** — permission-scoped operations on a user's behalf via the GitHub REST API
+
+Tested with Claude Code and Claude Desktop; works with any MCP-compliant client.
 
 Built as part of the [Coding Challenges: Build Your Own MCP Server](https://codingchallenges.fyi) project.
 
@@ -19,8 +21,8 @@ Modern AI agents increasingly ship with general-purpose web browsing. That capab
 
 This project draws a clear, working line across that boundary:
 
-- `CodingChallengesSolutionFinder` — a structured, deterministic lookup that an agent could partially approximate with browsing, but does so reliably and without hallucination
-- `create_github_issue` — a real authenticated write action against a user's GitHub account, gated by a narrowly scoped personal access token; something no general-purpose browsing tool can replicate
+- `CodingChallengesSolutionFinder` — returns exact links from the source rather than generated ones, making results reliable and deterministic
+- `create_github_issue` — a real authenticated write action against a user's GitHub account, gated by a narrowly scoped personal access token; something read-only browsing cannot do
 
 The contrast between these two tools is the point of the project.
 
@@ -43,7 +45,7 @@ The contrast between these two tools is the point of the project.
 User (natural language)
         │
         ▼
-MCP Client (Claude Code / Claude Desktop / Cursor / any MCP-compliant client)
+MCP Client (Claude Code / Claude Desktop / any MCP-compliant client)
         │  tools/list  →  discovers available tools
         │  tools/call  →  invokes a tool with structured input
         ▼
@@ -137,6 +139,8 @@ User: Create a GitHub issue in my mcp-server repo titled "Add caching to solutio
 
 Agent: Created issue #2: https://github.com/kajalnsut2500-m/mcp-server/issues/2
 ```
+
+> A short screen recording showing an agent creating a GitHub issue via this server would go here.
 
 ---
 
