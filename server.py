@@ -1,182 +1,173 @@
-import os
-import re
-
-import httpx
-
 from mcp.server.mcpserver import MCPServer
-from github_connector import GitHubConnector
-from state_manager import StateManager
+from dotenv import load_dotenv
+import subprocess
+import shlex
+import shutil
+import tempfile
+import fcntl
+import json
+import sys
+import os
 
-mcp = MCPServer("solution-finder")
+load_dotenv()
 
-README_URL = "https://raw.githubusercontent.com/CodingChallengesFYI/SharedSolutions/main/README.md"
-github = GitHubConnector()
-state = StateManager()
+mcp = MCPServer("agent-connector")
 
+WORKSPACE_ROOT = os.environ.get("WORKSPACE_ROOT", os.path.expanduser("~"))
+_REAL_WORKSPACE = os.path.realpath(WORKSPACE_ROOT)
+ALLOWED_COMMANDS = os.environ.get("ALLOWED_COMMANDS", "git,ls,cat,pwd,echo,python,node,npm").split(",")
+MEMORY_FILE = os.path.expanduser("~/.agent_memory.json")
 
-@mcp.tool()
-def hello(name: str) -> str:
-    """Say hello to someone.
-    
-    Args:
-        name: The name to greet.
-    """
-    return f"Hello, {name}"
-
-
-@mcp.tool()
-def agent_checkin(agent_name: str) -> str:
-    """Register that an agent is active and aware of the project.
-    
-    Call this when you start working to let other agents know you're here.
-    
-    Args:
-        agent_name: Identifier for this agent (e.g., 'Claude-Desktop-1').
-    """
-    state.set_agent_active(agent_name)
-    status = state.get_project_status()
-    return f"Agent '{agent_name}' checked in. Project has {status['total_changes']} recent changes and {status['total_activities']} logged activities."
+# Resolve allowed commands to absolute paths at startup to prevent PATH hijacking
+_COMMAND_PATHS: dict[str, str] = {
+    cmd: path
+    for cmd in ALLOWED_COMMANDS
+    if (path := shutil.which(cmd)) is not None
+}
 
 
-@mcp.tool()
-def get_project_knowledge() -> str:
-    """Get comprehensive project status and what other agents have done.
-    
-    Shows recent changes, activities, and what other agents are working on.
-    Call this first when starting to understand what's been done.
-    """
-    status = state.get_project_status()
-    
-    result = "=== PROJECT KNOWLEDGE ===\n\n"
-    result += f"Last sync: {status['last_sync']}\n"
-    result += f"Total changes logged: {status['total_changes']}\n"
-    result += f"Total activities: {status['total_activities']}\n\n"
-    
-    if status["active_agents"]:
-        result += "=== ACTIVE AGENTS ===\n"
-        for agent, info in status["active_agents"].items():
-            result += f"- {agent} (last seen: {info['last_seen']})\n"
-        result += "\n"
-    
-    if status["recent_changes"]:
-        result += "=== RECENT PROJECT CHANGES ===\n"
-        for change in status["recent_changes"]:
-            result += f"[{change['timestamp']}] {change['type']}: {change['description']}\n"
-        result += "\n"
-    
-    if status["recent_activities"]:
-        result += "=== RECENT AGENT ACTIVITIES ===\n"
-        for activity in status["recent_activities"]:
-            result += f"[{activity['timestamp']}] {activity['agent']}: {activity['action']}\n  → {activity['description']}\n"
-    
-    return result
+def _resolve(path: str) -> str:
+    resolved = os.path.realpath(os.path.join(WORKSPACE_ROOT, path))
+    if resolved != _REAL_WORKSPACE and not resolved.startswith(_REAL_WORKSPACE + os.sep):
+        raise ValueError(f"Path '{path}' is outside the workspace root.")
+    return resolved
 
 
-@mcp.tool()
-def log_work(agent_name: str, action: str, description: str) -> str:
-    """Log work you've done so other agents can see it.
-    
-    Args:
-        agent_name: Your agent identifier.
-        action: Type of work (e.g., 'created_issue', 'fixed_bug', 'refactored_code').
-        description: What you did and why.
-    """
-    state.log_agent_activity(agent_name, action, description)
-    return f"Activity logged: {action} - {description}"
-
-
-@mcp.tool()
-def CodingChallengesSolutionFinder(challenge_name: str) -> str:
-    """Find the Shared Solutions page link for a given Coding Challenge name (or part of it).
-    
-    Args:
-        challenge_name: The name or part of the name of the coding challenge to search for.
-    """
+def _load_store() -> dict:
     try:
-        response = httpx.get(README_URL, timeout=10.0)
-        response.raise_for_status()
-    except httpx.RequestError:
-        return "Error: could not reach GitHub right now. Please try again shortly."
-    except httpx.HTTPStatusError as e:
-        return f"Error: GitHub returned status {e.response.status_code}."
-
-    content = response.text
-
-    # Matches lines like: [Build your own Redis Server](https://github.com/.../challenge-redis.md)
-    links = re.findall(
-        r"\[([^\]]*" + re.escape(challenge_name) + r"[^\]]*)\]\(([^\)]+)\)",
-        content,
-        re.IGNORECASE,
-    )
-
-    if not links:
-        return f"No challenge found matching '{challenge_name}'."
-
-    base = "https://github.com/CodingChallengesFYI/SharedSolutions/blob/main/"
-    return "\n".join(f"{title}: {base}{url}" for title, url in links)
+        with open(MEMORY_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError:
+        return {}
 
 
-@mcp.tool()
-def create_github_issue(repo: str, title: str, body: str = "", agent_name: str = "unknown") -> str:
-    """Create a new issue in one of the user's GitHub repos.
-    
-    Args:
-        repo: Repository in 'username/repo-name' format.
-        title: The issue title.
-        body: The issue body/description (optional).
-        agent_name: Your agent identifier (for logging).
-    """
-    token_error = github.requires_token()
-    if token_error:
-        return token_error
-
-    result = github.create_issue(repo, title, body)
-    if not result["success"]:
-        return result["error"]
-
-    issue = result["data"]
-    issue_url = issue['html_url']
-    
-    # Log this activity for other agents to see
-    state.log_agent_activity(
-        agent_name,
-        "created_github_issue",
-        f"Created issue #{issue['number']}: {title}",
-        {"repo": repo, "issue_number": issue['number'], "url": issue_url}
-    )
-    
-    return f"Created issue #{issue['number']}: {issue_url}"
+def _save_store(store: dict) -> None:
+    dir_ = os.path.dirname(MEMORY_FILE) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=dir_)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(store, f, indent=2)
+        fd = -1  # fdopen took ownership; don't close again
+        os.replace(tmp_path, MEMORY_FILE)
+    except Exception:
+        if fd != -1:
+            os.close(fd)
+        os.unlink(tmp_path)
+        raise
 
 
 @mcp.tool()
-def list_github_issues(repo: str, agent_name: str = "unknown") -> str:
-    """List open issues in a GitHub repo.
-    
-    Args:
-        repo: Repository in 'username/repo-name' format.
-        agent_name: Your agent identifier (for logging).
-    """
-    token_error = github.requires_token()
-    if token_error:
-        return token_error
+def read_file(path: str) -> str:
+    """Read the contents of a file. Path is relative to WORKSPACE_ROOT."""
+    try:
+        full_path = _resolve(path)
+        with open(full_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except ValueError as e:
+        return f"Error: {e}"
+    except FileNotFoundError:
+        return f"Error: file not found — {path}"
+    except Exception as e:
+        return f"Error reading file: {e}"
 
-    result = github.get_issues(repo)
-    if not result["success"]:
-        return result["error"]
 
-    issues = result["data"]
-    
-    # Log this activity
-    state.log_agent_activity(
-        agent_name,
-        "listed_github_issues",
-        f"Listed open issues in {repo}",
-        {"repo": repo, "issue_count": len(issues) if issues else 0}
-    )
-    
-    if not issues:
-        return f"No open issues in {repo}."
-    return "\n".join(f"#{i['number']}: {i['title']} — {i['html_url']}" for i in issues)
+@mcp.tool()
+def write_file(path: str, content: str) -> str:
+    """Write content to a file. Path is relative to WORKSPACE_ROOT. Creates the file if it doesn't exist."""
+    try:
+        full_path = _resolve(path)
+        parent = os.path.dirname(full_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"Written to {path}"
+    except ValueError as e:
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error writing file: {e}"
+
+
+@mcp.tool()
+def list_directory(path: str = ".") -> str:
+    """List files and folders in a directory. Path is relative to WORKSPACE_ROOT."""
+    try:
+        full_path = _resolve(path)
+        entries = sorted(os.listdir(full_path))
+        lines = []
+        for entry in entries:
+            prefix = "[dir] " if os.path.isdir(os.path.join(full_path, entry)) else "[file]"
+            lines.append(f"{prefix} {entry}")
+        return "\n".join(lines) if lines else "(empty directory)"
+    except ValueError as e:
+        return f"Error: {e}"
+    except FileNotFoundError:
+        return f"Error: directory not found — {path}"
+    except Exception as e:
+        return f"Error listing directory: {e}"
+
+
+@mcp.tool()
+def run_command(command: str) -> str:
+    """Run a shell command and return its output. Allowed prefixes: git, ls, cat, pwd, echo, python, node, npm."""
+    try:
+        args = shlex.split(command)
+    except ValueError as e:
+        return f"Error: invalid command syntax — {e}"
+    if not args:
+        return "Error: empty command."
+    exe = _COMMAND_PATHS.get(args[0])
+    if exe is None:
+        available = ", ".join(_COMMAND_PATHS)
+        return f"Error: '{args[0]}' is not allowed or not found. Available: {available}."
+    try:
+        result = subprocess.run(
+            [exe] + args[1:],
+            shell=False,
+            cwd=_REAL_WORKSPACE,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        output = result.stdout
+        if result.stderr:
+            output += f"\n[stderr]\n{result.stderr}"
+        return output.strip() or "(no output)"
+    except subprocess.TimeoutExpired:
+        return "Error: command timed out after 30 seconds."
+    except Exception as e:
+        return f"Error running command: {e}"
+
+
+@mcp.tool()
+def shared_memory(action: str, key: str, value: str = "") -> str:
+    """Store or retrieve notes shared across agents. action: 'set', 'get', 'delete', or 'list'."""
+    try:
+        with open(MEMORY_FILE + ".lock", "w") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            store = _load_store()
+
+            if action == "set":
+                store[key] = value
+                _save_store(store)
+                return f"Stored '{key}'."
+            elif action == "get":
+                return store.get(key, f"No entry found for '{key}'.")
+            elif action == "delete":
+                if key in store:
+                    del store[key]
+                    _save_store(store)
+                    return f"Deleted '{key}'."
+                return f"No entry found for '{key}'."
+            elif action == "list":
+                return "\n".join(store.keys()) if store else "(memory is empty)"
+            else:
+                return "Error: action must be one of 'set', 'get', 'delete', 'list'."
+    except Exception as e:
+        print(f"shared_memory error: {e}", file=sys.stderr)
+        return f"Error accessing shared memory: {e}"
 
 
 if __name__ == "__main__":
