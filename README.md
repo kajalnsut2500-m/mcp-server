@@ -1,41 +1,24 @@
-# MCP Server for AI Coding Agents
+# MCP Server — Agent Connector
 
 ![Python](https://img.shields.io/badge/Python-3.13-blue)
 ![MCP](https://img.shields.io/badge/Protocol-MCP-green)
 ![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
-A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that extends AI coding agents with two categories of capability:
-
-- **Structured data retrieval** — deterministic lookups against external public sources
-- **Authenticated write actions** — permission-scoped operations on a user's behalf via the GitHub REST API
+A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that gives AI agents safe, sandboxed access to the local filesystem, a restricted shell, and a shared key-value memory store.
 
 Tested with Claude Code and Claude Desktop; works with any MCP-compliant client.
-
-Built as part of the [Coding Challenges: Build Your Own MCP Server](https://codingchallenges.fyi) project.
-
----
-
-## Why This Exists
-
-Modern AI agents increasingly ship with general-purpose web browsing. That capability has a hard boundary: it can only read what is already public, and it cannot take authenticated write actions on a user's behalf.
-
-This project draws a clear, working line across that boundary:
-
-- `CodingChallengesSolutionFinder` — returns exact links from the source rather than generated ones, making results reliable and deterministic
-- `create_github_issue` — a real authenticated write action against a user's GitHub account, gated by a narrowly scoped personal access token; something read-only browsing cannot do
-
-The contrast between these two tools is the point of the project.
 
 ---
 
 ## Tools
 
-| Tool | Description | Auth Required |
-|---|---|---|
-| `hello(name)` | Returns a greeting. Used as a protocol sanity check. | No |
-| `CodingChallengesSolutionFinder(challenge_name)` | Fetches the CodingChallengesFYI shared solutions README and returns links matching the given challenge name. | No |
-| `create_github_issue(repo, title, body)` | Creates a GitHub issue in the specified repository via the GitHub REST API. | Yes — `GITHUB_TOKEN` |
-| `list_github_issues(repo)` | Lists all open issues in the specified repository via the GitHub REST API. | Yes — `GITHUB_TOKEN` |
+| Tool | Description |
+|---|---|
+| `read_file(path)` | Read a file. Path is relative to `WORKSPACE_ROOT`. |
+| `write_file(path, content)` | Write or create a file. Path is relative to `WORKSPACE_ROOT`. |
+| `list_directory(path)` | List files and folders in a directory. Defaults to workspace root. |
+| `run_command(command)` | Run a shell command. Only commands in `ALLOWED_COMMANDS` are permitted. |
+| `shared_memory(action, key, value)` | Get, set, delete, or list notes shared across agents. |
 
 ---
 
@@ -51,23 +34,37 @@ MCP Client (Claude Code / Claude Desktop / any MCP-compliant client)
         ▼
 MCP Server  (this project — stdio transport)
         │
-        ├──▶  httpx.get()   →  GitHub README     (public, read-only)
-        └──▶  httpx.post()  →  GitHub REST API   (authenticated write)
-        │
-        ▼
-Structured result returned to the agent, then surfaced to the user
+        ├──▶  filesystem  →  read / write files inside WORKSPACE_ROOT
+        ├──▶  subprocess  →  run allowlisted shell commands
+        └──▶  ~/.agent_memory.json  →  shared key-value store
 ```
-
-The server communicates over MCP's standard JSON-RPC protocol via stdio. This means zero client-specific integration code — the same `server.py`, unmodified, works across all supported clients.
 
 ---
 
 ## Security
 
-- The GitHub token is read from the environment at call time via `os.environ.get("GITHUB_TOKEN")`. It is never hardcoded, logged, or committed to source control.
-- The token should be a **fine-grained personal access token** scoped to specific repositories with only the permissions needed: **Issues: Read and write** and (optionally) **Pull requests: Read and write**.
-- Tools that require authentication return a clear error message if the token is absent — the server starts and serves unauthenticated tools regardless.
-- All external HTTP calls are wrapped in explicit error handling. Network failures and unexpected API responses surface as clean messages to the calling agent rather than unhandled exceptions.
+- **Path sandboxing** — all file paths are resolved with `os.path.realpath` and checked against `WORKSPACE_ROOT`. Traversal attempts (e.g. `../../etc/passwd`) are rejected before any I/O.
+- **Command allowlist** — `run_command` only accepts commands listed in `ALLOWED_COMMANDS`. Each command is resolved to an absolute path at startup to prevent `PATH` hijacking.
+- **No shell injection** — commands are split with `shlex.split` and passed as a list to `subprocess.run(shell=False)`.
+- **Atomic writes** — `shared_memory` writes use a file lock and an atomic `os.replace` to prevent corruption under concurrent access.
+
+---
+
+## Configuration
+
+Settings are read from a `.env` file in the project root (loaded automatically at startup via `python-dotenv`).
+
+| Variable | Default | Description |
+|---|---|---|
+| `WORKSPACE_ROOT` | `~` (home directory) | Root directory for all file operations |
+| `ALLOWED_COMMANDS` | `git,ls,cat,pwd,echo,python,node,npm` | Comma-separated list of permitted shell commands |
+
+Example `.env`:
+
+```env
+WORKSPACE_ROOT=/Users/you/projects
+ALLOWED_COMMANDS=git,ls,cat,pwd,echo,python,node,npm
+```
 
 ---
 
@@ -83,28 +80,25 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Set your GitHub token
-
-Create a fine-grained personal access token with **Issues: Read and write** permissions on the repositories you need, then export it:
+### 2. Configure your workspace
 
 ```bash
-export GITHUB_TOKEN="your_token_here"
+cp .env.example .env   # or create .env manually
+# Set WORKSPACE_ROOT and ALLOWED_COMMANDS as needed
 ```
 
 ### 3. Verify with MCP Inspector
 
 ```bash
-npx @modelcontextprotocol/inspector python3 server.py
+npx @modelcontextprotocol/inspector .venv/bin/python3 server.py
 ```
-
-> **Note:** The MCP SDK's `StdioClientTransport` only forwards a small allowlist of environment variables (`HOME`, `PATH`, `USER`, etc.) to the subprocess — `GITHUB_TOKEN` is intentionally excluded. In the Inspector UI, add `GITHUB_TOKEN` under **Environment Variables** in the connection config before clicking Connect.
 
 ### 4. Connect to a client
 
 **Claude Code:**
 
 ```bash
-claude mcp add mcp-server --scope user -- /path/to/.venv/bin/python3 /path/to/server.py
+claude mcp add agent-connector --scope user -- /path/to/.venv/bin/python3 /path/to/server.py
 ```
 
 **Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -112,12 +106,9 @@ claude mcp add mcp-server --scope user -- /path/to/.venv/bin/python3 /path/to/se
 ```json
 {
   "mcpServers": {
-    "mcp-server": {
+    "agent-connector": {
       "command": "/path/to/.venv/bin/python3",
-      "args": ["/path/to/server.py"],
-      "env": {
-        "GITHUB_TOKEN": "your_token_here"
-      }
+      "args": ["/path/to/server.py"]
     }
   }
 }
@@ -128,35 +119,28 @@ claude mcp add mcp-server --scope user -- /path/to/.venv/bin/python3 /path/to/se
 ## Example Usage
 
 ```
-User: Is there a shared solution for the Redis coding challenge?
+User: Read the contents of my server config
 
-Agent: Build your own Redis Server:
-       https://github.com/CodingChallengesFYI/SharedSolutions/blob/main/Solutions/challenge-redis.md
-       Build your own Redis CLI:
-       https://github.com/CodingChallengesFYI/SharedSolutions/blob/main/Solutions/challenge-redis-cli.md
+Agent: [calls read_file("myproject/config.json")]
+       → returns file contents
 
-User: Create a GitHub issue in my mcp-server repo titled "Add caching to solution finder"
+User: List what's in the project root
 
-Agent: Created issue #2: https://github.com/kajalnsut2500-m/mcp-server/issues/2
+Agent: [calls list_directory(".")]
+       → [dir]  myproject
+          [file] README.md
+          [file] config.json
+
+User: Run git status
+
+Agent: [calls run_command("git status")]
+       → On branch main, nothing to commit
+
+User: Remember that the API key rotates every 30 days
+
+Agent: [calls shared_memory("set", "api_key_rotation", "rotates every 30 days")]
+       → Stored 'api_key_rotation'.
 ```
-
-> A short screen recording showing an agent creating a GitHub issue via this server would go here.
-
----
-
-## Known Limitations
-
-- `CodingChallengesSolutionFinder` makes a live HTTP request on every call — there is no caching.
-- Link extraction depends on the upstream README's markdown structure. A formatting change in that file could silently reduce match accuracy.
-- The server runs over stdio, making it a local per-machine process rather than a remotely accessible shared service.
-
----
-
-## Roadmap
-
-- [ ] Add response caching to `CodingChallengesSolutionFinder`
-- [ ] Resolve language-specific solutions from within a linked challenge page
-- [ ] Migrate to streamable-HTTP transport for remote, multi-user deployment
 
 ---
 
@@ -166,5 +150,5 @@ Agent: Created issue #2: https://github.com/kajalnsut2500-m/mcp-server/issues/2
 |---|---|
 | Language | Python 3.13 |
 | MCP framework | MCP Python SDK |
-| HTTP client | httpx |
-| External API | GitHub REST API v3 |
+| Config | python-dotenv |
+| Transport | stdio |
