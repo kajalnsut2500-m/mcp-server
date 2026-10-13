@@ -4,30 +4,12 @@ import re
 import httpx
 
 from mcp.server.mcpserver import MCPServer
+from github_connector import GitHubConnector
 
 mcp = MCPServer("solution-finder")
 
 README_URL = "https://raw.githubusercontent.com/CodingChallengesFYI/SharedSolutions/main/README.md"
-GITHUB_API_URL = "https://api.github.com/repos"
-GITHUB_HEADERS = {
-    "Accept": "application/vnd.github+json",
-}
-
-
-def _get_github_headers() -> dict:
-    """Get GitHub API headers with authorization token if available."""
-    token = os.environ.get("GITHUB_TOKEN")
-    headers = GITHUB_HEADERS.copy()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
-
-
-def _requires_token() -> str:
-    """Return error message if GITHUB_TOKEN is not set."""
-    if not os.environ.get("GITHUB_TOKEN"):
-        return "Error: GITHUB_TOKEN environment variable is not set."
-    return ""
+github = GitHubConnector()
 
 
 @mcp.tool()
@@ -80,27 +62,15 @@ def create_github_issue(repo: str, title: str, body: str = "") -> str:
         title: The issue title.
         body: The issue body/description (optional).
     """
-    token_error = _requires_token()
+    token_error = github.requires_token()
     if token_error:
         return token_error
 
-    headers = _get_github_headers()
-    payload = {"title": title, "body": body}
+    result = github.create_issue(repo, title, body)
+    if not result["success"]:
+        return result["error"]
 
-    try:
-        response = httpx.post(
-            f"{GITHUB_API_URL}/{repo}/issues",
-            headers=headers,
-            json=payload,
-            timeout=10.0,
-        )
-        response.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        return f"Error creating issue: {e.response.status_code} - {e.response.text}"
-    except httpx.RequestError:
-        return "Error: could not reach GitHub right now."
-
-    issue = response.json()
+    issue = result["data"]
     return f"Created issue #{issue['number']}: {issue['html_url']}"
 
 
@@ -111,26 +81,15 @@ def list_github_issues(repo: str) -> str:
     Args:
         repo: Repository in 'username/repo-name' format.
     """
-    token_error = _requires_token()
+    token_error = github.requires_token()
     if token_error:
         return token_error
 
-    headers = _get_github_headers()
+    result = github.get_issues(repo)
+    if not result["success"]:
+        return result["error"]
 
-    try:
-        response = httpx.get(
-            f"{GITHUB_API_URL}/{repo}/issues",
-            headers=headers,
-            params={"state": "open"},
-            timeout=10.0,
-        )
-        response.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        return f"Error fetching issues: {e.response.status_code} - {e.response.text}"
-    except httpx.RequestError:
-        return "Error: could not reach GitHub right now."
-
-    issues = response.json()
+    issues = result["data"]
     if not issues:
         return f"No open issues in {repo}."
     return "\n".join(f"#{i['number']}: {i['title']} — {i['html_url']}" for i in issues)
