@@ -21,8 +21,13 @@ Tested with Claude Code and Claude Desktop; works with any MCP-compliant client.
 | `shared_memory(action, key, value)` | Get, set, delete, or list notes shared across agents. |
 
 ---
+## Image
 
-## Architecture
+<img width="998" height="820" alt="image" src="https://github.com/user-attachments/assets/33e4571f-14db-4de6-8e9e-a06ea9495ab5" />
+
+
+
+## Architecture 
 
 ```
 User (natural language)
